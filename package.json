@@ -1,0 +1,18 @@
+{
+  "author": {
+    "name": "Atlantis-software"
+  },
+  "name": "easy-ldap",
+  "description": "LDAP client",
+  "version": "0.0.1",
+  "license": "MIT",
+  "main": "index.js",
+  "dependencies": {
+    "generic-pool": "2.2.2",
+    "ldapjs": "1.0.0",
+    "lodash": "3.10.1"
+  },
+  "devDependencies": {
+    "mocha": "2.3.4"
+  }
+}
