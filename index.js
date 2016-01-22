@@ -19,8 +19,6 @@ fs.readdir(__dirname + '/schema', function(err, filenames) {
 
 var path = require('path');
 
-console.log('RANGER SIMPLICITE : ', ldapModule);
-
 var ldap = function(url, dn, callback) {
     var self = this;
     this.dn = dn;
@@ -30,10 +28,10 @@ var ldap = function(url, dn, callback) {
     
     this.pool = new Pool({
         name: 'ldap',
+        
         create: function(cb) {
-            
             if(!url || !dn || !_.isString(url) || !_.isString(dn)) {
-                cb(new Error('INVALID ARGUMENTS'));
+                return cb(new Error('INVALID ARGUMENTS'));
             }
             var resultObject = {};
             resultObject.schema = {};
@@ -47,11 +45,17 @@ var ldap = function(url, dn, callback) {
                 });
             };
             
+            resultObject.unbind = function(cb) {
+                this.ldapClient.unbind(function(err) {
+                    if(err) {
+                        return cb(err);
+                    }
+                    return cb(null);
+                });
+            };
+            
             resultObject.ldapClient = ldapModule.createClient({url: url});
             _.keys(schemas).forEach(function(className) {
-                
-                
-                
                 
                 this.getRules = function(objectClass, cb) {
                     var self = this;
@@ -89,9 +93,7 @@ var ldap = function(url, dn, callback) {
                             if (err) {
                                 return cb(err);
                             }
-
-
-
+                            
                             // Get attributes of each parents
                             parentList.forEach(function(parentName) {
                                 attributesRules = _.assign(attributesRules, schemas[parentName].attributes);
@@ -105,10 +107,6 @@ var ldap = function(url, dn, callback) {
                     }
 
                 };
-                
-                
-                
-                
 
                 this.getRules(className, function(err, schemaRules) {
                     if (err) {
@@ -117,6 +115,19 @@ var ldap = function(url, dn, callback) {
                     
                     var mySchema = schemas[className];
                     mySchema.attributes = schemaRules;
+                    
+                    resultObject.findOperator = function(filter) {
+                        if(filter.search('<=') !== -1) {
+                            return '<=';
+                        } else if(filter.search('>=') !== -1) {
+                            return '>=';
+                        } else if(filter.search('~=') !== -1) {
+                            return '~=';
+                        } else  {
+                            return false;
+                        }
+                    };
+                    
                     
                     resultObject.parseFilterLine = function(value, key, resultFilter) {
                         if (!key || !value) {
@@ -127,44 +138,105 @@ var ldap = function(url, dn, callback) {
                                 resultObject.parseFilterLine(value, key, resultFilter);
                             });
                             resultFilter.filter = resultFilter.filter + ')';
+                            
                         } else if (key === 'or') {
                             resultFilter.filter = resultFilter.filter + '(|';
                             _.each(value, function(value, key) {
                                 resultObject.parseFilterLine(value, key, resultFilter);
                             });
                             resultFilter.filter = resultFilter.filter + ')';
+                            
                         } else if (key === 'and') {
                             resultFilter.filter = resultFilter.filter + '(&';
                             _.each(value, function(value, key) {
                                 resultObject.parseFilterLine(value, key, resultFilter);
                             });
                             resultFilter.filter = resultFilter.filter + ')';
+                            
                         } else {
-                            resultFilter.filter = resultFilter.filter + '(' + key + '=' + value + ')';
+                            if(resultObject.findOperator(value)) {
+                                resultFilter.filter = resultFilter.filter + '(' + key + value + ')';
+                            } else {
+                                resultFilter.filter = resultFilter.filter + '(' + key + '=' + value + ')';
+                            }
+                            
                         }
                     };
-                    resultObject.find = function(dn, filter, cb) {
+                    
+                    resultObject.findOne = function(dn, options, cb) {
+                        if(options && _.isFunction(options)) {
+                            var cb = options;
+                            var options = {};
+                        }
+                        if(!_.isPlainObject) {
+                            return cb(new Error('OPTIONS MUST BE OBJECT'));
+                        }
+                        options.scope = 'one';
+                        
+                        resultObject.find(dn, options, function(err, result) {
+                            if(err) {
+                                return cb(err, result);
+                            }
+                            return cb(null, result);
+                        });
+                    };
+                    
+                    resultObject.findAll = function(dn, options, cb) {
+                        if(options && _.isFunction(options)) {
+                            var cb = options;
+                            var options = {};
+                        }
+                        if(!_.isPlainObject) {
+                            return cb(new Error('OPTIONS MUST BE OBJECT'));
+                        }
+                        options.scope = 'base';
+                        
+                        resultObject.find(dn, options, function(err, result) {
+                            if(err) {
+                                return cb(err, result);
+                            }
+                            return cb(null, result);
+                        });
+                    };
+                    
+                    resultObject.findAllSub = function(dn, options, cb) {
+                        if(options && _.isFunction(options)) {
+                            var cb = options;
+                            var options = {};
+                        }
+                        if(!_.isPlainObject) {
+                            return cb(new Error('OPTIONS MUST BE OBJECT'));
+                        }
+                        options.scope = 'sub';
+                        
+                        resultObject.find(dn, options, function(err, result) {
+                            if(err) {
+                                return cb(err, result);
+                            }
+                            return cb(null, result);
+                        });
+                    };
+                    
+                    resultObject.find = function(dn, options, cb) {
                         var resultFilter = {filter: ''};
-                        _.each(filter, function(value, key) {
+                        _.each(options.filter, function(value, key) {
                             resultObject.parseFilterLine(value, key, resultFilter);
                         });
                         
-                        console.log('RANGER FILTER : ', resultFilter);
-                        var options = {
-                            filter: resultFilter.filter,
-                            scope: 'sub'
-                        };
-                        try {
-                        var control = new ldapModule.ServerSideSortingRequestControl({value: {attributeType: 'cn'}});
-
-                        console.log('RANGER RED : ', control.value);
-                        } catch (e) {
-                            console.log('RANGER TA MERE : '+ e);
+                        if(resultFilter.filter !== '') {
+                            options.filter = resultFilter.filter;
+                        } else {
+                            options.filter = '(objectclass=*)';
                         }
                         
-                        resultObject.ldapClient.search(dn.dn, options, control, function(err, res) {
+                        // As of today, OpenLdap does not support server-side sorting
+                        /*var control = new ldapModule.ServerSideSortingRequestControl({value:
+                            {attributeType: 'givenName', orderingRule: 'caseIgnoreOrderingMatch'}
+                        });*/
+
+                        resultObject.ldapClient.search(dn.dn, options, function(err, res) {
                             if(err) {
-                                cb('SEARCH QUERY ERROR : ' + err);
+                                return cb(new Error('SEARCH QUERY ERROR : ' + err));
                             }
                             var result = [];
                             res.on('searchEntry', function(entry) {
@@ -177,10 +249,12 @@ var ldap = function(url, dn, callback) {
                                 console.error('error: ' + err.message);
                             });
                             res.on('end', function(message) {
-                                cb(null, result);
+                                if(message.status !== 0) {
+                                    return cb(new Error('SEARCH QUERY ERROR STATUS : ' + message.status), result);
+                                }
+                                return cb(null, result);
                             });
                         });
-
                     };
                     
                     resultObject[className] = function(dn, name) {
@@ -191,6 +265,7 @@ var ldap = function(url, dn, callback) {
                             schema: mySchema,
                             rdn: 'uid',
                             attributes: {},
+                            
                             attrs: function(attributes) {
                                 schemaClass.attributes = {};
                                 _.each(attributes, function(value, key) {
@@ -240,45 +315,25 @@ var ldap = function(url, dn, callback) {
                                     return cb(null, schemaClass);
                                 });
                             }
-
+                            
                         };
                         return schemaClass;
                     };
                 });
             });
-            
-            setTimeout(function() {
-                cb(null, resultObject);
-            });
-            
-        },
-        bind: function(client, ldapLogin, ldapPassword, cb) {
-            client.bind(ldapLogin, ldapPassword, function(err) {
-                if(err) {
-                    return cb(err);
-                }
-                return cb(null);
-            });
-        },
-        destroy: function(client) {
+            cb(null, resultObject);
         }
     });
-    setTimeout(function() {
-        self.pool.acquire(function(err, client) {
-            if (err) {
-                return callback('ERROR WHILE INITIATING CLIENT');
-            }
-            return callback(null, client);
-        });
-
-    }, 2000);
+    self.pool.acquire(function(err, client) {
+        if (err) {
+            return callback('ERROR WHILE INITIATING CLIENT');
+        }
+        return callback(null, client);
+    });
     
 };
 
-
-
 ldap.prototype.createDn = function(ldapBase) {
-    console.log('RANGER HIBOU : ', this);
     var dn = {
         dn: ldapBase,
         base: ldapBase,
@@ -299,40 +354,6 @@ ldap.prototype.createDn = function(ldapBase) {
             }
             this.dn = this.dn.substring(this.dn.indexOf(',')+1, this.dn.length);
             return this;
-        },
-        parseFilterLine: function(value, key, resultFilter) {
-            console.log(key + '=' + value);
-            if(!key || !value) {
-                return null;
-            } else if(key === 'not') {
-                resultFilter.filter = resultFilter.filter + '(!';
-                _.each(value, function(value, key) {
-                    self.parseFilterLine(value, key, resultFilter);
-                });
-                resultFilter.filter = resultFilter.filter + ')';
-            } else if(key === 'or') {
-                resultFilter.filter = resultFilter.filter + '(|';
-                _.each(value, function(value, key) {
-                    self.parseFilterLine(value, key, resultFilter);
-                });
-                resultFilter.filter = resultFilter.filter + ')';
-            } else if(key === 'and') {
-                resultFilter.filter = resultFilter.filter + '(&';
-                _.each(value, function(value, key) {
-                    self.parseFilterLine(value, key, resultFilter);
-                });
-                resultFilter.filter = resultFilter.filter + ')';
-            } else {
-                resultFilter.filter = resultFilter.filter + '(' + key + '=' + value + ')';
-            }
-        },
-        find: function(filter) {
-            var resultFilter = {filter: ''};
-            _.each(filter, function(value, key) {
-                self.parseFilterLine(value, key, resultFilter);
-            });
-            console.log('RANGER FILTER : ', resultFilter);
-            
         }
     };
     var self = dn;
@@ -344,60 +365,6 @@ ldap.prototype.addSchema = function(schema) {
     this.schemas = _.assign(this.schemas, schema);
 };
 
-// Return an object containing all attributes rules (inherited ones included) for the corresponding objectClass
-ldap.prototype.getRules = function(objectClass, cb) {
-    var self = this;
-    var attributesRules = {};
-    var schema = this.schemas[objectClass];
-    
-    if (!schema) {
-        return cb(new Error('NO CORRESPONDING OBJECTCLASS'));
-    }
-
-    attributesRules = schema.attributes;
-
-    // Check if object inherits
-    if (schema.inherit.length) {
-        
-        // Get list of parents (recursively)
-        (function getParents(parentList, cb, classList) {
-            var classList = classList || [];
-            asynk.each(parentList, function(parentName, cb) {
-                if (!(parentName in classList)) {
-                    classList.push(parentName);
-                    var parentInherits = self.schemas[parentName].inherit;
-                    // If parent also inherit, get his parents
-                    if (parentInherits.length) {
-                        getParents(parentInherits, cb, classList);
-                    } else {
-                        cb(null);
-                    }
-                    
-                }
-            }).serie().done(function() {
-                cb(null, classList);
-            }).fail(cb);
-        })(schema.inherit, function(err, parentList) {
-            if (err) {
-                return cb(err);
-            }
-            
-
-            
-            // Get attributes of each parents
-            parentList.forEach(function(parentName) {
-                attributesRules = _.assign(attributesRules, self.schemas[parentName].attributes);
-            });
-            var self = this;
-            
-            cb(null, attributesRules);
-        });
-        
-    } else {
-        cb(null, attributesRules);
-    }
-    
-};
 /*
 ldap.prototype.checkRules = function(argumentsObject, attributesRules) {
     delete argumentsObject.objectClass;
